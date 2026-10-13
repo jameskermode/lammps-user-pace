@@ -1317,6 +1317,26 @@ void ACECTildeBasisSet::load_yaml(const string &yaml_file_name) {
                 radial_functions->dcut_in(mu_i, mu_j) = bondSpec.dcut_in;
                 radial_functions->inner_cutoff_type = bondSpec.inner_cutoff_type;
 
+                if (bondSpec.radbasename == "Tabulated") {
+                    // the tables replace crad . g_k (TabulatedRadial); stored in the global
+                    // (nradmax, lmax) layout, which may be wider than this bond's
+                    auto *rf = dynamic_cast<ACERadialFunctions *>(radial_functions);
+                    if (rf == nullptr)
+                        throw invalid_argument("radbasename `Tabulated` needs ACERadialFunctions");
+                    TabulatedRadial &tab = rf->tables.at(mu_i * nelements + mu_j);
+                    tab.nbins = bondSpec.radtable_nbins;
+                    tab.rcut = bondSpec.rcut;
+                    tab.gk = bondSpec.radtable_gk;
+                    tab.dgk = bondSpec.radtable_dgk;
+                    tab.rnl.assign(nradmax * (lmax + 1), {});
+                    tab.drnl.assign(nradmax * (lmax + 1), {});
+                    for (NS_TYPE n = 0; n < bondSpec.nradmax; n++)
+                        for (LS_TYPE l = 0; l <= bondSpec.lmax; l++) {
+                            tab.rnl.at(n * (lmax + 1) + l) = bondSpec.radtable_rnl.at(n * (bondSpec.lmax + 1) + l);
+                            tab.drnl.at(n * (lmax + 1) + l) = bondSpec.radtable_drnl.at(n * (bondSpec.lmax + 1) + l);
+                        }
+                    continue;
+                }
                 //setup crad
                 for (NS_TYPE n = 0; n < bondSpec.nradmax; n++)
                     for (LS_TYPE l = 0; l <= bondSpec.lmax; l++)
