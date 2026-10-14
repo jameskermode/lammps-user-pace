@@ -405,7 +405,6 @@ void ACERecursiveEvaluator::init(ACECTildeBasisSet *basis_set, int heuristic) {
     //hard-core repulsion
     DCR_cache.init(1, "DCR_cache");
     DCR_cache.fill(0);
-    dB_flatten.init(basis_set->max_dB_array_size, "dB_flatten");
 
     // resize the arrays
     species_dags.resize(basis_set->nelements);
@@ -782,8 +781,6 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
 
     Array1D<ACEComplex> dA(basis_set->rankmax, "dA");
     Array1D<int> spec(basis_set->rankmax, "spec");
-
-    dB_flatten.fill({0., 0.});
 
     ACEDYcomponent grad_phi_nlm{0, 0}, DY{0., 0};
 
