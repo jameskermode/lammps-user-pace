@@ -30,6 +30,8 @@
 
 #include "ace-evaluator/ace_recursive.h"
 
+#include <algorithm>
+
 #include "ace-evaluator/ace_abstract_basis.h"
 #include "ace-evaluator/ace_types.h"
 
@@ -173,6 +175,23 @@ void ACEDAG::init(Array2D<int> xAspec,
     nodes_pre.resize(0, 0);
     coeffs_pre.resize(0, 0);
     haschild.resize(0);
+
+    // the leaves in interleaved order, for the one-density passes (see leaf_nodes)
+    leaf_nodes.clear();
+    leaf_coeffs.clear();
+    if (ndensity == 1 && num2_leaf > 0) {
+        const int chunk = (num2_leaf + LEAF_INTERLEAVE - 1) / LEAF_INTERLEAVE;
+        leaf_nodes.reserve(2 * num2_leaf);
+        leaf_coeffs.reserve(num2_leaf);
+        for (int q = 0; q < chunk; q++)
+            for (int c = 0; c < LEAF_INTERLEAVE; c++) {
+                const int k = c * chunk + q;
+                if (k >= num2_leaf) continue;
+                leaf_nodes.push_back(nodes(num2_int + k, 0));
+                leaf_nodes.push_back(nodes(num2_int + k, 1));
+                leaf_coeffs.push_back(coeffs(num2_int + k, 0));
+            }
+    }
 
     /* finalize dag: allocate buffer storage  */
     AAbuf.resize(num1 + num2_int);
@@ -1026,7 +1045,37 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
                            dag.Aspec(idx, 3));
 
 
-    if (recursive) {
+    if (recursive && ndensity == 1) {
+        /* STAGE 2: FORWARD PASS, one density: the same products as below, with rho summed in registers
+         * (four partial sums over the leaves, in dag.leaf_nodes order) instead of read-modify-writes of
+         * rhos(0) through memory, which serialised the leaf loop. */
+        const int *dag_nodes = dag.nodes.get_data();
+        const DOUBLE_TYPE *dag_coefs = dag.coeffs.get_data();
+        ACEComplex *AA = dag.AAbuf.get_data();
+        const int num2_int = dag.get_num2_int();
+        const int num2_leaf = dag.get_num2_leaf();
+        DOUBLE_TYPE r0 = 0, r1 = 0, r2 = 0, r3 = 0;
+        // interior nodes (save AA)
+        for (int k = 0; k < num2_int; k++) {
+            const ACEComplex AAcur = AA[dag_nodes[2 * k]] * AA[dag_nodes[2 * k + 1]];
+            AA[num1 + k] = AAcur;
+            r0 += AAcur.real_part_product(dag_coefs[k]);
+        }
+        // leaf nodes -> no need to store in AAbuf
+        const int *ln = dag.leaf_nodes.data();
+        const DOUBLE_TYPE *lc = dag.leaf_coeffs.data();
+        int k = 0;
+        for (; k + 3 < num2_leaf; k += 4) {
+            r0 += AA[ln[2 * k]].real_part_product(AA[ln[2 * k + 1]]) * lc[k];
+            r1 += AA[ln[2 * k + 2]].real_part_product(AA[ln[2 * k + 3]]) * lc[k + 1];
+            r2 += AA[ln[2 * k + 4]].real_part_product(AA[ln[2 * k + 5]]) * lc[k + 2];
+            r3 += AA[ln[2 * k + 6]].real_part_product(AA[ln[2 * k + 7]]) * lc[k + 3];
+        }
+        for (; k < num2_leaf; k++)
+            r0 += AA[ln[2 * k]].real_part_product(AA[ln[2 * k + 1]]) * lc[k];
+        rhos(0) += (r0 + r1) + (r2 + r3);
+
+    } else if (recursive) {
 #ifdef DEBUG_ENERGY_CALCULATIONS
         printf("Recursive Julia-style evaluator\n");
 #endif
@@ -1178,7 +1227,47 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
 
         /* --------- we now continue with the recursive code --------- */
 
-        if (recursive) {
+        if (recursive && ndensity == 1) {
+            /* STAGE 2: BACKWARD PASS, one density: the leaves first (a leaf's own weight is never read, so it is
+             * neither stored nor zeroed; dag.leaf_nodes order), then the interior nodes from the last down.  Half of
+             * consecutive interior nodes share their first child on a large linear ACE, so that child's
+             * contributions are summed in a register and written out when the child changes.  A pending child is
+             * always written before its own weight is read: it differs from the current node's first child, which
+             * is smaller than the current node. */
+            const int *dag_nodes = dag.nodes.get_data();
+            const DOUBLE_TYPE *dag_coefs = dag.coeffs.get_data();
+            const ACEComplex *AA = dag.AAbuf.get_data();
+            ACEComplex *W = dag.w.get_data();
+            const int num2_int = dag.get_num2_int();
+            const int num2_leaf = dag.get_num2_leaf();
+            const DOUBLE_TYPE dF = dF_drho(0);
+            std::fill(W, W + num1 + num2_int, ACEComplex{0., 0.});
+            const int *ln = dag.leaf_nodes.data();
+            const DOUBLE_TYPE *lc = dag.leaf_coeffs.data();
+            for (int k = 0; k < num2_leaf; k++) {
+                const int i1 = ln[2 * k], i2 = ln[2 * k + 1];
+                const DOUBLE_TYPE wcur = dF * lc[k];        // real: nothing feeds a leaf
+                W[i1] += AA[i2] * wcur;
+                W[i2] += AA[i1] * wcur;
+            }
+            int cur = -1;
+            ACEComplex acc{0., 0.};
+            for (int k = num2_int - 1; k >= 0; k--) {
+                const int i1 = dag_nodes[2 * k], i2 = dag_nodes[2 * k + 1];
+                if (i1 != cur) {
+                    if (cur >= 0) W[cur] += acc;
+                    cur = i1;
+                    acc = {0., 0.};
+                }
+                ACEComplex wcur = W[num1 + k];
+                wcur += dF * dag_coefs[k];
+                acc += wcur * AA[i2];
+                if (i2 == cur) acc += wcur * AA[i1];
+                else W[i2] += wcur * AA[i1];
+            }
+            if (cur >= 0) W[cur] += acc;
+
+        } else if (recursive) {
             /* STAGE 2:  BACKWARD PASS */
             int i1, i2;
             ACEComplex AA1{0.0, 0};
