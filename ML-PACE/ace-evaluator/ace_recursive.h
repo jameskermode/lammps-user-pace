@@ -98,6 +98,14 @@ public:
     // number of leaf nodes (nc = no child)
     int num2_leaf;
 
+    // The leaf nodes again, for the passes with one density (ndensity == 1): their two children and coefficient,
+    // reordered so that consecutive leaves rarely share a child (LEAF_INTERLEAVE contiguous chunks, interleaved).
+    // Any order is valid because leaves feed no other node; this one keeps the accumulations into a child's
+    // weight w(child) from forming a store -> load -> multiply-add dependency chain.  Empty if ndensity > 1.
+    static constexpr int LEAF_INTERLEAVE = 16;
+    vector<int> leaf_nodes;
+    vector<DOUBLE_TYPE> leaf_coeffs;
+
 
     // number of 1-particle basis functions 
     // (these will be stored in the first num1 entries of AAbuf)
