@@ -419,6 +419,11 @@ void ACERecursiveEvaluator::init(ACECTildeBasisSet *basis_set, int heuristic) {
     Y_cache.fill({0, 0});
 
     DY_cache.init(1, basis_set->lmax + 1, "dY_dense_cache");
+
+    // per-neighbour (l, m >= 0) sums of the force pass
+    const int nlm = (basis_set->lmax + 1) * (basis_set->lmax + 2) / 2;
+    force_P.init(nlm, "force_P");
+    force_Q.init(nlm, "force_Q");
     DY_cache.fill({0., 0.});
 
     //hard-core repulsion
@@ -778,7 +783,7 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
     DOUBLE_TYPE evdwl = 0, evdwl_cut = 0, rho_core = 0;
     DOUBLE_TYPE r_norm;
     DOUBLE_TYPE xn, yn, zn, r_xyz;
-    DOUBLE_TYPE R, GR, DGR, R_over_r, DR, DCR;
+    DOUBLE_TYPE R, GR, DGR, DCR;
     DOUBLE_TYPE *r_hat;
 
     SPECIES_TYPE mu_j;
@@ -795,13 +800,12 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
     int j, jj;
     SHORT_INT_TYPE factor;
 
-    ACEComplex Y{0, 0}, Y_DR{0., 0.};
+    ACEComplex Y{0, 0};
     Array1D<ACEComplex> A_cache(basis_set->rankmax, "A_cache");
 
     Array1D<ACEComplex> dA(basis_set->rankmax, "dA");
     Array1D<int> spec(basis_set->rankmax, "spec");
 
-    ACEDYcomponent grad_phi_nlm{0, 0}, DY{0., 0};
 
     //size is +1 of max to avoid out-of-boundary array access in double-triangular scheme
 //    Array1D<ACEComplex> A_forward_prod(basis_set->rankmax + 1, "A_forward_prod");
@@ -964,11 +968,15 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
                     printf("Y(lm=%d,%d)=(%f, %f)\n", l, m, Y.real, Y.img);
 #endif
                     A_lm(l, m) += R * Y; //accumulation sum over neighbours
-                    Y_jj(l, m) = Y;
-                    DY_jj(l, m) = dylm(l, m);
                 }
             }
         }
+        // Y and dY depend on (l, m) only: cache them once per neighbour, not once per n
+        for (l = 0; l <= lmaxi; l++)
+            for (m = 0; m <= l; m++) {
+                Y_jj(l, m) = ylm(l, m);
+                DY_jj(l, m) = dylm(l, m);
+            }
 
         //hard-core repulsion
         rho_core += basis_set->radial_functions->cr;
@@ -1410,48 +1418,41 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
             f_ji[2] += DGR * r_hat[2];
         }
 
-//for rank > 1
-        for (n = 0; n < nradiali; n++) {
-            for (l = 0; l <= lmaxi; l++) {
-                R_over_r = R_cache(jj, n, l) * inv_r_norm;
-                DR = DR_cache(jj, n, l);
-
-                // for m>=0
-                for (m = 0; m <= l; m++) {
-                    ACEComplex w = weights(mu_j, n, l, m);
-                    if (w == 0)
-                        continue;
-                    //counting for -m cases if m>0
-                    // if (m > 0) w *= 2;  // not needed for recursive eval
-
-                    DY = DY_cache_jj(l, m);
-                    Y_DR = Y_cache_jj(l, m) * DR;
-
-                    grad_phi_nlm.a[0] = Y_DR * r_hat[0] + DY.a[0] * R_over_r;
-                    grad_phi_nlm.a[1] = Y_DR * r_hat[1] + DY.a[1] * R_over_r;
-                    grad_phi_nlm.a[2] = Y_DR * r_hat[2] + DY.a[2] * R_over_r;
-#ifdef DEBUG_FORCES_CALCULATIONS
-                    printf("d_phi(n=%d, l=%d, m=%d) = ((%f,%f), (%f,%f), (%f,%f))\n", n + 1, l, m,
-                           grad_phi_nlm.a[0].real, grad_phi_nlm.a[0].img,
-                           grad_phi_nlm.a[1].real, grad_phi_nlm.a[1].img,
-                           grad_phi_nlm.a[2].real, grad_phi_nlm.a[2].img);
-
-                    printf("weights(n,l,m)(%d,%d,%d) = (%f,%f)\n", n + 1, l, m, w.real, w.img);
-                    //if (m>0) w*=2;
-                    printf("dF(n,l,m)(%d, %d, %d) += (%f, %f, %f)\n", n + 1, l, m,
-                           w.real_part_product(grad_phi_nlm.a[0]),
-                           w.real_part_product(grad_phi_nlm.a[1]),
-                           w.real_part_product(grad_phi_nlm.a[2])
-                    );
-#endif
-// real-part multiplication only
-                    f_ji[0] += w.real_part_product(grad_phi_nlm.a[0]);
-                    f_ji[1] += w.real_part_product(grad_phi_nlm.a[1]);
-                    f_ji[2] += w.real_part_product(grad_phi_nlm.a[2]);
+        //for rank > 1
+        // sum_nlm Re(w_nlm grad(R_nl Y_lm)) = rhat sum_lm Re(Q_lm Y_lm) + sum_lm Re(P_lm dY_lm) / r, with
+        // P_lm = sum_n w_nlm R_nl and Q_lm = sum_n w_nlm dR_nl: the n-sum first, then one contraction with Y and
+        // dY per neighbour instead of one per (n, l, m)
+        {
+            ACEComplex *P = force_P.get_data(), *Q = force_Q.get_data();
+            const int nlm = (lmaxi + 1) * (lmaxi + 2) / 2;
+            for (int t = 0; t < nlm; t++) P[t] = Q[t] = ACEComplex{0., 0.};
+            for (n = 0; n < nradiali; n++) {
+                int t = 0;
+                for (l = 0; l <= lmaxi; l++) {
+                    const DOUBLE_TYPE Rn = R_cache(jj, n, l), DRn = DR_cache(jj, n, l);
+                    for (m = 0; m <= l; m++, t++) {
+                        const ACEComplex &w = weights(mu_j, n, l, m);
+                        P[t].real += w.real * Rn;
+                        P[t].img += w.img * Rn;
+                        Q[t].real += w.real * DRn;
+                        Q[t].img += w.img * DRn;
+                    }
                 }
             }
+            DOUBLE_TYPE rad = 0, g0 = 0, g1 = 0, g2 = 0;
+            int t = 0;
+            for (l = 0; l <= lmaxi; l++)
+                for (m = 0; m <= l; m++, t++) {
+                    const ACEDYcomponent &D = DY_cache_jj(l, m);
+                    rad += Q[t].real_part_product(Y_cache_jj(l, m));
+                    g0 += P[t].real_part_product(D.a[0]);
+                    g1 += P[t].real_part_product(D.a[1]);
+                    g2 += P[t].real_part_product(D.a[2]);
+                }
+            f_ji[0] += rad * r_hat[0] + g0 * inv_r_norm;
+            f_ji[1] += rad * r_hat[1] + g1 * inv_r_norm;
+            f_ji[2] += rad * r_hat[2] + g2 * inv_r_norm;
         }
-
 
 #ifdef PRINT_INTERMEDIATE_VALUES
         printf("f_ji(jj=%d, i=%d)=(%f, %f, %f)\n", jj, i,

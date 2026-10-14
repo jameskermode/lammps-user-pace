@@ -168,6 +168,12 @@ class ACERecursiveEvaluator : public ACEEvaluator {
     Array3DLM<ACEDYcomponent> DY_cache = Array3DLM<ACEDYcomponent>("dY_dense_cache");
 
     /**
+     * force pass: per-neighbour sums over n of w_nlm R_nl (P) and w_nlm dR_nl/dr (Q), (l, m >= 0) packed
+     */
+    Array1D<ACEComplex> force_P = Array1D<ACEComplex>("force_P");
+    Array1D<ACEComplex> force_Q = Array1D<ACEComplex>("force_Q");
+
+    /**
      * cache for derivatives of hard-core repulsion
      * shape:[max_jnum]
      */
