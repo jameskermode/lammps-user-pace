@@ -1140,6 +1140,7 @@ void ACECTildeBasisSet::save_yaml(const string &yaml_file_name) const {
     ctilde_basis_yaml["E0"].SetStyle(YAML_PACE::EmitterStyle::Flow);
 
     ctilde_basis_yaml["deltaSplineBins"] = this->deltaSplineBins;
+    if (summed_neighbour_A) ctilde_basis_yaml["summed_neighbour_A"] = true;
 
     map<int, YAML_PACE::Node> yaml_map_embedding_specifications;
     for (const auto &p: this->map_embedding_specifications)
@@ -1206,6 +1207,9 @@ void ACECTildeBasisSet::load_yaml(const string &yaml_file_name) {
         this->elements_name[mu] = elements_name_vec.at(mu);
         this->elements_to_index_map[elements_name_vec.at(mu)] = mu;
     }
+
+    if (ctilde_basis_yaml["summed_neighbour_A"])
+        summed_neighbour_A = ctilde_basis_yaml["summed_neighbour_A"].as<bool>();
 
     //reading E0vals
     auto e0_vec = ctilde_basis_yaml["E0"].as<vector<DOUBLE_TYPE >>();

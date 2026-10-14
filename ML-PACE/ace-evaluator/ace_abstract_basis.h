@@ -277,6 +277,14 @@ public:
     ACECartesianSphericalHarmonics spherical_harmonics; ///< object to work with spherical harmonics in Cartesian representation
 
     bool is_sort_functions = true; ///< flag to specify, whether to sort the basis functions or preserve the order
+    /// Every neighbour accumulates into the element-0 A basis (and reads the element-0 weights) whatever its
+    /// species; species enter only through the per-bond radial functions R_nl^{mu_i mu_j}.  This is the form of
+    /// a linear ACE whose A basis pools the neighbour species (e.g. a species-embedded / tensor-reduced ACE,
+    /// its embedding channels folded into n): without it, every product factor must be expanded over the
+    /// neighbour species, up to nelements^rank products per function.  The functions then use mu = 0 for
+    /// every factor.  yaml key `summed_neighbour_A`.
+    bool summed_neighbour_A = false;
+#define ACE_HAS_SUMMED_NEIGHBOUR_A 1   // lets a client (e.g. LAMMPS pace/kk) compile against bases with or without it
     //for multispecies
 
     map<SPECIES_TYPE, ACEEmbeddingSpecification> map_embedding_specifications;
