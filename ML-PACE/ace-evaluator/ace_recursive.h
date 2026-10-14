@@ -166,12 +166,6 @@ class ACERecursiveEvaluator : public ACEEvaluator {
     Array1D<DOUBLE_TYPE> DCR_cache = Array1D<DOUBLE_TYPE>("DCR_cache");
 
     /**
-    * Partial derivatives \f$ dB_{i \mu n l m t}^{(r)} \f$  with sequential numbering over [func_ind][ms_ind][r],
-    * shape:[func_ms_r_ind]
-    */
-    Array1D<ACEComplex> dB_flatten = Array1D<ACEComplex>("dB_flatten");
-
-    /**
      * pointer to the ACEBasisSet object
      */
     ACECTildeBasisSet *basis_set = nullptr;
