@@ -936,6 +936,7 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
 
 
         basis_set->radial_functions->evaluate(r_norm, basis_set->nradbase, nradiali, mu_i, mu_j);
+        const SPECIES_TYPE mu_a = basis_set->summed_neighbour_A ? 0 : mu_j;   // A index; the radial is per bond
         basis_set->spherical_harmonics.compute_ylm(r_hat[0], r_hat[1], r_hat[2], lmaxi);
         //loop for computing A's
         //rank = 1
@@ -947,12 +948,12 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
             printf("dgr(n=%d)(r=%f) = %f\n", n, r_norm, dgr(n));
 #endif
             DG_cache(jj, n) = dgr(n);
-            A_rank1(mu_j, n) += GR * Y00;
+            A_rank1(mu_a, n) += GR * Y00;
         }
         //loop for computing A's
         // for rank > 1
         for (n = 0; n < nradiali; n++) {
-            auto &A_lm = A(mu_j, n);
+            auto &A_lm = A(mu_a, n);
             for (l = 0; l <= lmaxi; l++) {
                 R = fr(n, l);
 #ifdef DEBUG_ENERGY_CALCULATIONS
@@ -1385,6 +1386,7 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
 // loop over neighbour atoms for force calculations
     for (jj = 0; jj < jnum_actual; ++jj) {
         mu_j = elements(jj);
+        const SPECIES_TYPE mu_w = basis_set->summed_neighbour_A ? 0 : mu_j;   // weights index, as mu_a
         r_hat = &rhats(jj, 0);
         inv_r_norm = inv_r_norms(jj);
 
@@ -1402,11 +1404,11 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
 
 //for rank = 1
         for (n = 0; n < nradbasei; ++n) {
-            if (weights_rank1(mu_j, n) == 0)
+            if (weights_rank1(mu_w, n) == 0)
                 continue;
             auto &DG = DG_cache(jj, n);
             DGR = DG * Y00;
-            DGR *= weights_rank1(mu_j, n);
+            DGR *= weights_rank1(mu_w, n);
 #ifdef DEBUG_FORCES_CALCULATIONS
             printf("r=1: (n,l,m)=(%d, 0, 0)\n", n + 1);
             printf("\tGR(n=%d, r=%f)=%f\n", n + 1, r_norm, gr(n));
@@ -1431,7 +1433,7 @@ ACERecursiveEvaluator::compute_atom(int i, DOUBLE_TYPE **x, const SPECIES_TYPE *
                 for (l = 0; l <= lmaxi; l++) {
                     const DOUBLE_TYPE Rn = R_cache(jj, n, l), DRn = DR_cache(jj, n, l);
                     for (m = 0; m <= l; m++, t++) {
-                        const ACEComplex &w = weights(mu_j, n, l, m);
+                        const ACEComplex &w = weights(mu_w, n, l, m);
                         P[t].real += w.real * Rn;
                         P[t].img += w.img * Rn;
                         Q[t].real += w.real * DRn;
